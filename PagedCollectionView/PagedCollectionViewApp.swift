@@ -11,7 +11,7 @@ import SwiftUI
 struct PagedCollectionViewApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RotationTestView()
         }
     }
 }
