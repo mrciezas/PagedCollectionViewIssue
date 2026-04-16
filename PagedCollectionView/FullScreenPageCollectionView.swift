@@ -87,42 +87,11 @@ Change: PageChange {
         fatalError("init(coder:) has not been implemented")
     }
 
-    // This is the piece of code that fix the issue after the rotations, not sure why 🤔
-    public override func layoutSubviews() {
-        let sizeChanged = previousBoundsSize != .zero && bounds.size != previousBoundsSize
-        previousBoundsSize = bounds.size
-
-        super.layoutSubviews()
-
-        let expectedOffset = CGFloat(currentPageIndex) * bounds.width
-        if bounds.width > 0 && abs(contentOffset.x - expectedOffset) > 1 && !isDragging && !isDecelerating && !isScrollingToItem {
-            contentOffset.x = expectedOffset
-        }
-
-        // TODO: Check this before commit
-        // During rotation, hide adjacent cells so they don't peek through
-        if sizeChanged {
-            for cell in visibleCells {
-                if let indexPath = indexPath(for: cell), indexPath.item != currentPageIndex {
-                    cell.isHidden = true
-                }
-            }
-            // Un-hide after the rotation animation completes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                guard let self else { return }
-                for cell in self.visibleCells {
-                    cell.isHidden = false
-                }
-            }
-        }
-        // TODO: Check this before commit
-    }
-
     private func configure() {
         showsHorizontalScrollIndicator = false
         showsVerticalScrollIndicator = false
         bouncesVertically = false
-        isPagingEnabled = true
+        isPagingEnabled = false
         contentInsetAdjustmentBehavior = .never
     }
 
@@ -211,11 +180,6 @@ Change: PageChange {
         return page
     }
 
-    private func contentOffset(for page: Int) -> CGPoint {
-        let pageOffset = CGFloat(page) * bounds.width
-        return CGPoint(x: pageOffset, y: 0)
-    }
-
     // MARK: - PageFlowLayoutDelegate
 
     func currentPage() -> Int {
@@ -289,7 +253,10 @@ extension FullScreenPageCollectionView {
         }
 
         override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
+            print("[PageFlowLayout] shouldInvalidateLayout(forBoundsChange: \(newBounds))")
             guard let collectionView else { return false }
+            let superValue = super.shouldInvalidateLayout(forBoundsChange: newBounds)
+            print("[PageFlowLayout] shouldInvalidateLayout(forBoundsChange:) super is \(superValue))")
 
             if newBounds.size != collectionView.bounds.size {
                 print("[PageFlowLayout] shouldInvalidateLayout — bounds changed: \(collectionView.bounds.size) → \(newBounds.size), currentPage: \(delegate?.currentPage() ?? -1)")
@@ -298,8 +265,10 @@ extension FullScreenPageCollectionView {
             if newBounds.size.width > 0 {
                 let pages = calculatedContentWidth / newBounds.size.width
                 let arePagesExact = pages.truncatingRemainder(dividingBy: 1) == 0
+                print("[PageFlowLayout] shouldInvalidateLayout(forBoundsChange:) 1 return \(!arePagesExact)")
                 return !arePagesExact
             }
+            print("[PageFlowLayout] shouldInvalidateLayout(forBoundsChange:) 2 return false")
             return false
         }
 
@@ -329,15 +298,35 @@ extension FullScreenPageCollectionView {
             super.invalidateLayout(with: context)
         }
 
-        override func targetContentOffset(forProposedContentOffset proposedContentOffset: CGPoint) -> CGPoint {
-            guard let collectionView, let currentPage = delegate?.currentPage() else { return .zero }
-            let correctedOffset = CGFloat(currentPage) * collectionView.bounds.width
-            print("[PageFlowLayout] targetContentOffset — proposed: \(proposedContentOffset), currentPage: \(currentPage), bounds.width: \(collectionView.bounds.width), correctedOffset: \(correctedOffset)")
-            return CGPoint(x: correctedOffset, y: 0)
+        override func targetContentOffset(
+            forProposedContentOffset proposedContentOffset: CGPoint,
+            withScrollingVelocity velocity: CGPoint
+        ) ->  CGPoint {
+            print("[PageFlowLayout] targetContentOffset for velocity")
+            guard let collectionView, collectionView.bounds.width >  0 else {
+                print("[PageFlowLayout] targetContentOffset for velocity 1")
+                return proposedContentOffset
+            }
+            print("[PageFlowLayout] targetContentOffset for velocity 2")
+            let pageWidth = collectionView.bounds.width
+            let currentOffset = collectionView.contentOffset.x
+            let currentPage = round(currentOffset / pageWidth)
+
+            var targetPage: CGFloat
+            if abs(velocity.x) > 0.2 {
+                targetPage = velocity.x >  0 ? currentPage + 1 : currentPage - 1
+            } else {
+                targetPage = round(proposedContentOffset.x / pageWidth)
+            }
+
+            let pageCount = CGFloat(collectionView.numberOfItems(inSection: 0))
+            targetPage = max(0, min(targetPage, pageCount - 1))
+            return CGPoint(x: targetPage * pageWidth, y: 0)
         }
 
         // This function updates the contentOffset in case is wrong
         override func finalizeCollectionViewUpdates() {
+            print("[PageFlowLayout] finalizeCollectionViewUpdates")
             guard let collectionView, let currentPage = delegate?.currentPage() else { return }
             let xPosition = CGFloat(currentPage) * collectionView.bounds.width
             print("[PageFlowLayout] finalizeCollectionViewUpdates — currentPage: \(currentPage), expectedX: \(xPosition), actualX: \(collectionView.contentOffset.x)")
